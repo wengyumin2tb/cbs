@@ -1,0 +1,503 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, collection, doc, setDoc, onSnapshot, 
+  query, where, serverTimestamp, orderBy, limit 
+} from 'firebase/firestore';
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  Monitor, Smartphone, Send, Users, Wifi, 
+  CheckCircle, Radio, X, User, Shield 
+} from 'lucide-react';
+
+// --- Firebase Configuration & Initialization ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- Main Application Component ---
+export default function LANBroadcaster() {
+  const [user, setUser] = useState(null);
+  const [mode, setMode] = useState('selection'); // 'selection', 'host', 'client'
+  const [roomCode, setRoomCode] = useState('CLASS-101');
+  const [clientName, setClientName] = useState('');
+  
+  // Auth Setup
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        // In a real scenario, use custom token if available
+        await signInAnonymously(auth); 
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  if (!user) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-900 text-white">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+          <p>正在連接系統服務...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
+      {mode === 'selection' && (
+        <SelectionScreen 
+          setMode={setMode} 
+          roomCode={roomCode} 
+          setRoomCode={setRoomCode}
+          clientName={clientName}
+          setClientName={setClientName}
+        />
+      )}
+      {mode === 'host' && (
+        <HostScreen 
+          user={user} 
+          roomCode={roomCode} 
+          onBack={() => setMode('selection')} 
+        />
+      )}
+      {mode === 'client' && (
+        <ClientScreen 
+          user={user} 
+          roomCode={roomCode} 
+          clientName={clientName}
+          onBack={() => setMode('selection')} 
+        />
+      )}
+    </div>
+  );
+}
+
+// --- Component: Selection Screen (Entry Point) ---
+function SelectionScreen({ setMode, roomCode, setRoomCode, clientName, setClientName }) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-br from-indigo-900 via-blue-900 to-slate-900">
+      <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full space-y-8">
+        <div className="text-center space-y-2">
+          <div className="mx-auto w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4">
+            <Wifi size={32} />
+          </div>
+          <h1 className="text-3xl font-bold text-gray-800">區域廣播系統</h1>
+          <p className="text-gray-500">請選擇您的身份以開始連線</p>
+        </div>
+
+        <div className="space-y-4">
+          <div className="relative">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">房間代碼 / 教室編號</label>
+            <input 
+              type="text" 
+              value={roomCode}
+              onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-center text-lg tracking-widest uppercase"
+              placeholder="例如: CLASS-A"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 pt-4">
+          <button 
+            onClick={() => setMode('host')}
+            className="flex flex-col items-center justify-center p-6 border-2 border-indigo-100 hover:border-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-all duration-200 group"
+          >
+            <Monitor className="w-10 h-10 text-indigo-600 mb-3 group-hover:scale-110 transition-transform" />
+            <span className="font-bold text-indigo-900">我是主機</span>
+            <span className="text-xs text-indigo-500 mt-1">發送廣播</span>
+          </button>
+
+          <button 
+            onClick={() => {
+              if(!clientName.trim()) {
+                 alert("請輸入識別名稱或座號"); 
+                 return;
+              }
+              setMode('client');
+            }}
+            className="flex flex-col items-center justify-center p-6 border-2 border-emerald-100 hover:border-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-all duration-200 group"
+          >
+            <Smartphone className="w-10 h-10 text-emerald-600 mb-3 group-hover:scale-110 transition-transform" />
+            <span className="font-bold text-emerald-900">我是子機</span>
+            <div className="mt-2 w-full">
+               <input 
+                type="text" 
+                placeholder="輸入座號/姓名" 
+                value={clientName}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setClientName(e.target.value)}
+                className="w-full text-center text-sm p-1 border border-emerald-200 rounded bg-white"
+               />
+            </div>
+          </button>
+        </div>
+        
+        <div className="text-center text-xs text-gray-400 mt-4">
+          無需安裝軟體 • 即時同步 • 區域模擬
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Component: Host Screen (Sender) ---
+function HostScreen({ user, roomCode, onBack }) {
+  const [message, setMessage] = useState('');
+  const [clients, setClients] = useState([]);
+  const [selectedClients, setSelectedClients] = useState([]); // Array of client IDs
+  const [broadcastHistory, setBroadcastHistory] = useState([]);
+  const [isSending, setIsSending] = useState(false);
+
+  // 1. Listen for Active Clients
+  useEffect(() => {
+    if (!user) return;
+    const clientsRef = collection(db, 'artifacts', appId, 'public', 'data', `room-${roomCode}-clients`);
+    
+    // In a real app, we would filter by 'lastActive' to only show online users
+    // For this demo, we just show everyone who joined
+    const q = query(clientsRef, orderBy('joinedAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const clientList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setClients(clientList);
+    }, (error) => {
+        console.error("Error fetching clients:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user, roomCode]);
+
+  // 2. Function to Send Message
+  const handleSend = async () => {
+    if (!message.trim()) return;
+    setIsSending(true);
+
+    try {
+      const messageData = {
+        content: message,
+        senderId: user.uid,
+        timestamp: serverTimestamp(),
+        // If selectedClients is empty, it means Broadcast to All
+        // Otherwise, it's a targeted message
+        targetClients: selectedClients.length > 0 ? selectedClients : 'ALL', 
+        type: 'text'
+      };
+
+      // Add to history collection
+      await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', `room-${roomCode}-messages`)), messageData);
+      
+      // Update local history for UI feedback immediately
+      setBroadcastHistory(prev => [{...messageData, timestamp: new Date(), id: Date.now()}, ...prev]);
+      setMessage('');
+    } catch (e) {
+      console.error("Send failed", e);
+      alert("發送失敗，請重試");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const toggleClientSelection = (clientId) => {
+    setSelectedClients(prev => {
+      if (prev.includes(clientId)) {
+        return prev.filter(id => id !== clientId);
+      } else {
+        return [...prev, clientId];
+      }
+    });
+  };
+
+  const selectAll = () => {
+    if (selectedClients.length === clients.length) {
+      setSelectedClients([]);
+    } else {
+      setSelectedClients(clients.map(c => c.id));
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-100 overflow-hidden">
+      {/* Sidebar: Client List */}
+      <div className="w-80 bg-white border-r border-gray-200 flex flex-col shadow-lg z-10">
+        <div className="p-4 border-b border-gray-200 bg-gray-50">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="font-bold text-gray-700 flex items-center gap-2">
+              <Users size={18} />
+              線上子機 ({clients.length})
+            </h2>
+            <button onClick={selectAll} className="text-xs text-blue-600 font-medium hover:underline">
+              {selectedClients.length === clients.length && clients.length > 0 ? '取消全選' : '全選'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">房間: {roomCode}</p>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-2 space-y-2">
+          {clients.length === 0 ? (
+             <div className="text-center text-gray-400 py-10 text-sm">
+               尚無子機連線...<br/>請在另一台裝置以「子機」加入
+             </div>
+          ) : (
+            clients.map(client => (
+              <div 
+                key={client.id}
+                onClick={() => toggleClientSelection(client.id)}
+                className={`flex items-center p-3 rounded-lg cursor-pointer border transition-all ${
+                  selectedClients.includes(client.id) 
+                    ? 'bg-blue-50 border-blue-500 shadow-sm' 
+                    : 'bg-white border-gray-100 hover:border-gray-300'
+                }`}
+              >
+                <div className={`w-3 h-3 rounded-full mr-3 ${selectedClients.includes(client.id) ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+                <div>
+                  <div className="font-bold text-gray-800">{client.name}</div>
+                  <div className="text-xs text-gray-400 font-mono">ID: {client.id.slice(0,4)}</div>
+                </div>
+                {selectedClients.includes(client.id) && <CheckCircle size={16} className="ml-auto text-blue-500" />}
+              </div>
+            ))
+          )}
+        </div>
+        
+        <div className="p-4 border-t border-gray-200">
+           <button onClick={onBack} className="w-full py-2 text-sm text-gray-500 hover:text-red-500 flex items-center justify-center gap-2">
+             <X size={16} /> 結束廣播
+           </button>
+        </div>
+      </div>
+
+      {/* Main Content: Broadcast Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <header className="bg-white p-4 shadow-sm flex items-center justify-between">
+           <div className="flex items-center gap-3">
+             <div className="p-2 bg-indigo-100 text-indigo-700 rounded-lg">
+               <Shield size={20} />
+             </div>
+             <div>
+               <h1 className="text-xl font-bold text-gray-800">主機控制台</h1>
+               <p className="text-sm text-gray-500">
+                 目標: {selectedClients.length === 0 ? '全體廣播 (All)' : `已選 ${selectedClients.length} 台子機`}
+               </p>
+             </div>
+           </div>
+           <div className="flex items-center gap-2">
+             <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></div>
+             <span className="text-sm font-medium text-green-600">系統連線正常</span>
+           </div>
+        </header>
+
+        {/* Message History (Preview) */}
+        <div className="flex-1 p-6 overflow-y-auto bg-slate-50">
+          {broadcastHistory.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-50">
+              <Radio size={64} className="mb-4" />
+              <p>準備發送廣播內容...</p>
+            </div>
+          ) : (
+            <div className="space-y-4 max-w-3xl mx-auto">
+              {broadcastHistory.map((msg) => (
+                <div key={msg.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex gap-4">
+                   <div className="flex-shrink-0 mt-1">
+                     <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
+                       我
+                     </div>
+                   </div>
+                   <div className="flex-1">
+                     <div className="flex justify-between items-start">
+                       <span className="text-xs font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                         To: {msg.targetClients === 'ALL' ? '所有人' : '指定群組'}
+                       </span>
+                       <span className="text-xs text-gray-400">
+                         {msg.timestamp?.toLocaleTimeString()}
+                       </span>
+                     </div>
+                     <p className="mt-2 text-gray-800 text-lg leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Input Area */}
+        <div className="p-6 bg-white border-t border-gray-200">
+          <div className="max-w-3xl mx-auto flex gap-4">
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="在此輸入廣播內容 (支援多行)..."
+              className="flex-1 p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none h-24 shadow-inner text-lg"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+            />
+            <button 
+              onClick={handleSend}
+              disabled={isSending || !message.trim()}
+              className="px-8 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 flex flex-col items-center justify-center gap-1"
+            >
+              {isSending ? (
+                <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full"></div>
+              ) : (
+                <>
+                  <Send size={24} />
+                  <span>發送</span>
+                </>
+              )}
+            </button>
+          </div>
+          <div className="max-w-3xl mx-auto mt-2 text-xs text-gray-400 text-right">
+            按 Enter 發送，Shift + Enter 換行
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Component: Client Screen (Receiver) ---
+function ClientScreen({ user, roomCode, clientName, onBack }) {
+  const [messages, setMessages] = useState([]);
+  const [latestMessage, setLatestMessage] = useState(null);
+  const scrollRef = useRef(null);
+
+  // 1. Register Client on Join
+  useEffect(() => {
+    if (!user) return;
+    const registerClient = async () => {
+      try {
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', `room-${roomCode}-clients`, user.uid), {
+          name: clientName,
+          joinedAt: serverTimestamp(),
+          status: 'online'
+        });
+      } catch (e) {
+        console.error("Registration failed", e);
+      }
+    };
+    registerClient();
+  }, [user, roomCode, clientName]);
+
+  // 2. Listen for Messages
+  useEffect(() => {
+    if (!user) return;
+    const messagesRef = collection(db, 'artifacts', appId, 'public', 'data', `room-${roomCode}-messages`);
+    const q = query(messagesRef, orderBy('timestamp', 'asc')); // Get all history basically, or limit
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const allMsgs = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+      
+      // Filter logic: Only show messages for ALL or specifically for ME
+      const myMsgs = allMsgs.filter(msg => 
+        msg.targetClients === 'ALL' || 
+        (Array.isArray(msg.targetClients) && msg.targetClients.includes(user.uid))
+      );
+      
+      setMessages(myMsgs);
+      if (myMsgs.length > 0) {
+        setLatestMessage(myMsgs[myMsgs.length - 1]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user, roomCode]);
+
+  // Auto scroll
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-900 text-white">
+      {/* Client Header */}
+      <div className="bg-gray-800 p-4 shadow-md border-b border-gray-700 flex justify-between items-center z-10">
+        <div className="flex items-center gap-3">
+          <div className="bg-emerald-500/20 p-2 rounded-lg text-emerald-400">
+            <User size={20} />
+          </div>
+          <div>
+            <h1 className="font-bold text-lg">{clientName} (我)</h1>
+            <p className="text-xs text-gray-400 flex items-center gap-1">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+              已連線至 {roomCode}
+            </p>
+          </div>
+        </div>
+        <button 
+          onClick={onBack}
+          className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-gray-300 transition-colors"
+        >
+          離開
+        </button>
+      </div>
+
+      {/* Big Display Area (For latest message) */}
+      <div className="flex-1 flex flex-col relative overflow-hidden">
+        {messages.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-600">
+            <Monitor size={80} className="mb-6 opacity-20" />
+            <h2 className="text-2xl font-light">等待主機廣播...</h2>
+            <p className="mt-2 text-sm opacity-50">請保持此畫面開啟</p>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col">
+            {/* Spotlight Latest Message */}
+            <div className="flex-1 flex items-center justify-center p-8 bg-gradient-to-b from-gray-900 to-gray-800">
+              <div className="max-w-4xl w-full text-center space-y-6 animate-in fade-in zoom-in duration-500">
+                <span className="inline-block px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-sm mb-2">
+                   最新廣播
+                </span>
+                <div className="text-4xl md:text-5xl font-bold leading-tight text-white drop-shadow-lg break-words">
+                  {latestMessage?.content}
+                </div>
+                <div className="text-gray-500 text-sm mt-4">
+                   {latestMessage?.timestamp ? new Date(latestMessage.timestamp.seconds * 1000).toLocaleTimeString() : ''}
+                </div>
+              </div>
+            </div>
+
+            {/* History Drawer (Bottom) */}
+            <div className="h-48 bg-gray-800 border-t border-gray-700 flex flex-col">
+               <div className="px-4 py-2 bg-gray-800/90 backdrop-blur text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-700">
+                 歷史訊息
+               </div>
+               <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+                 {messages.map((msg) => (
+                   <div key={msg.id} className={`p-3 rounded-lg text-sm border ${msg.id === latestMessage?.id ? 'bg-gray-700 border-gray-600' : 'bg-transparent border-gray-700 text-gray-400'}`}>
+                     <div className="flex justify-between mb-1">
+                        <span className="font-bold text-gray-300">主機</span>
+                        <span className="text-xs opacity-50">
+                          {msg.timestamp ? new Date(msg.timestamp.seconds * 1000).toLocaleTimeString() : '...'}
+                        </span>
+                     </div>
+                     <div>{msg.content}</div>
+                   </div>
+                 ))}
+               </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
